@@ -257,8 +257,8 @@ class LoginTest(UserMixin, TestCase):
         response = self._post({'token-otp_token': totp_str(device.bin_key),
                                'login_view-current_step': 'token'})
         self.assertEqual(response.context_data['wizard']['form'].errors,
-                         {'__all__': ['Invalid token. Please make sure you '
-                                      'have entered it correctly.']})
+                         {'__all__': ['Verification temporarily disabled because '
+                                      'of 1 failed attempt, please try again soon.']})
 
     @mock.patch('two_factor.gateways.fake.Fake')
     @mock.patch('two_factor.views.core.signals.user_verified.send')
@@ -316,7 +316,8 @@ class LoginTest(UserMixin, TestCase):
 
             # Valid token should be accepted.
             response = self._post({'token-otp_token': totp_str(device.bin_key),
-                                   'login_view-current_step': 'token'})
+                                   'login_view-current_step': 'token',
+                                   'device_id': device.persistent_id})
             self.assertRedirects(response, resolve_url(settings.LOGIN_REDIRECT_URL))
             self.assertEqual(device.persistent_id,
                              self.client.session.get(DEVICE_ID_SESSION_KEY))
@@ -357,6 +358,27 @@ class LoginTest(UserMixin, TestCase):
 
         # Check that the signal was fired.
         mock_signal.assert_called_with(sender=mock.ANY, request=mock.ANY, user=user, device=device)
+
+    def test_totp_token_does_not_impact_backup_token(self):
+        user = self.create_user()
+        backup_device = user.staticdevice_set.create(name='backup')
+        backup_device.token_set.create(token='abcdef123')
+        totp_device = user.totpdevice_set.create(name='default', key=random_hex())
+
+        response = self._post({'auth-username': 'bouke@example.com',
+                               'auth-password': 'secret',
+                               'login_view-current_step': 'auth'})
+        self.assertContains(response, 'Token:')
+
+        backup_device.refresh_from_db()
+        self.assertEqual(backup_device.throttling_failure_count, 0)
+        response = self._post({'token-otp_token': totp_str(totp_device.bin_key),
+                               'login_view-current_step': 'token'})
+        self.assertRedirects(response, resolve_url(settings.LOGIN_REDIRECT_URL))
+        self.assertEqual(self.client.session['_auth_user_id'], str(user.pk))
+
+        backup_device.refresh_from_db()
+        self.assertEqual(backup_device.throttling_failure_count, 0)
 
     @mock.patch('two_factor.views.utils.logger')
     def test_reset_wizard_state(self, mock_logger):
