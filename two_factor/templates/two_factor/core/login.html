@@ -2,8 +2,11 @@
 {% load i18n %}
 
 {% block content %}
+  {% block 'h1_title' %}
   <h1>{% block title %}{% trans "Login" %}{% endblock %}</h1>
+  {% endblock %}
 
+  {% block 'text_introduction' %}
   {% if wizard.steps.current == 'auth' %}
     <p>{% blocktrans %}Enter your credentials.{% endblocktrans %}</p>
   {% elif wizard.steps.current == 'token' %}
@@ -22,13 +25,18 @@
       These tokens have been generated for you to print and keep safe. Please
       enter one of these backup tokens to login to your account.{% endblocktrans %}</p>
   {% endif %}
+  {% endblock %}
 
-  <form action="" method="post">{% csrf_token %}
+  {% block 'main_form' %}
+  <form action="" method="post" {% block 'main_form_extra_params' %}{% endblock %}>
+    {%  block 'main_form_content' %}
+    {% csrf_token %}
     {% include "two_factor/_wizard_forms.html" %}
 
     {# hidden submit button to enable [enter] key #}
     <input type="submit" value="" class="d-none" />
 
+    {% block 'other_devices' %}
     {% if other_devices %}
       <p>{% trans "Or, alternatively, use one of your backup phones:" %}</p>
       <p>
@@ -39,15 +47,18 @@
         </button>
       {% endfor %}</p>
     {% endif %}
+    {% endblock %}
 
     {% include "two_factor/_wizard_actions.html" %}
+    {% endblock %}
   </form>
+  {% endblock %}
 
   {% block 'backup_tokens' %}
     {% if backup_tokens %}
        <hr>
        <div class="backup_tokens_form">
-       <form action="" method="post">
+       <form action="" method="post" {% block 'backup_tokens_form_extra_params' %}{% endblock %}>
            {% csrf_token %}
             <p>{% trans "As a last resort, you can use a backup token:" %}</p>
             <p>
