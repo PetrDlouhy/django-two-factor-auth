@@ -98,11 +98,14 @@ class E2ETests(UserMixin, StaticLiveServerTestCase):
         self.wait_for_element(
             By.XPATH, "//p[contains(text(), 'Primary method: Authenticate using a WebAuthn-compatible device')]")
 
-        # try registering the same authenticator and fail
-        # (have to modify the existing authenticator first, so it's no longer the default one)
+        # try registering the same authenticator and fail. The setup wizard
+        # only renders when the user has no primary device; renaming alone no
+        # longer achieves that (a renamed device can still be primary), so
+        # rename to 'backup', which primary_device_candidates() excludes. The
+        # credential stays in the DB, so re-registration is still refused.
         authenticator = default_device(user)
         self.assertIsNotNone(authenticator)
-        authenticator.name = 'not default anymore'
+        authenticator.name = 'backup'
         authenticator.save()
 
         self.webdriver.get(urljoin(self.base_url, reverse("two_factor:setup")))

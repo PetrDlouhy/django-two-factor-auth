@@ -1,9 +1,14 @@
 import string
+from datetime import timedelta
 from unittest import mock
 from urllib.parse import parse_qsl, urlparse
 
 from django.contrib.auth.hashers import make_password
+from django.contrib.auth.models import AnonymousUser
 from django.test import TestCase, override_settings
+from django.utils import timezone
+from django_otp.plugins.otp_static.models import StaticDevice
+from django_otp.plugins.otp_totp.models import TOTPDevice
 from django_otp.util import random_hex
 from phonenumber_field.phonenumber import PhoneNumber
 
@@ -17,7 +22,7 @@ from two_factor.plugins.phonenumber.utils import (
 from two_factor.plugins.registry import GeneratorMethod, MethodRegistry
 from two_factor.utils import (
     USER_DEFAULT_DEVICE_ATTR_NAME, default_device, get_otpauth_url,
-    totp_digits,
+    primary_device_candidates, totp_digits,
 )
 from two_factor.views.utils import (
     get_remember_device_cookie, validate_remember_device_cookie,
@@ -212,3 +217,147 @@ class EmailUtilsTests(TestCase):
     def test_mask_email(self):
         self.assertEqual(mask_email('bouke@example.com'), 'b***e@example.com')
         self.assertEqual(mask_email('tim@example.com'), 't**@example.com')
+
+
+# Module-level so ``import_string`` can resolve them by dotted path, which is
+# the contract of TWO_FACTOR_DEFAULT_DEVICE_PICKER.
+
+def _picker_returns_first(devices):
+    return devices[0] if devices else None
+
+
+def _picker_returns_none(devices):
+    return None
+
+
+class PrimaryDeviceCandidatesTests(UserMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = self.create_user()
+
+    def test_excludes_static_devices(self):
+        totp = TOTPDevice.objects.create(user=self.user, name='totp')
+        static = StaticDevice.objects.create(user=self.user, name='tokens')
+        self.assertEqual(primary_device_candidates([totp, static]), [totp])
+
+    def test_excludes_devices_named_backup(self):
+        totp = TOTPDevice.objects.create(user=self.user, name='totp')
+        backup = TOTPDevice.objects.create(user=self.user, name='backup')
+        self.assertEqual(primary_device_candidates([totp, backup]), [totp])
+
+    def test_keeps_order_of_input(self):
+        # Input deliberately not in name order, pk order or reverse order, so
+        # a implementation that sorted by any of them would fail here.
+        b = TOTPDevice.objects.create(user=self.user, name='b')
+        a = TOTPDevice.objects.create(user=self.user, name='a')
+        c = TOTPDevice.objects.create(user=self.user, name='c')
+        self.assertEqual(primary_device_candidates([c, a, b]), [c, a, b])
+
+    def test_empty_list_returns_empty_list(self):
+        self.assertEqual(primary_device_candidates([]), [])
+
+
+class DefaultDeviceSelectionTests(UserMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = self.create_user()
+
+    def test_device_named_default_wins_over_more_recently_used(self):
+        TOTPDevice.objects.create(
+            user=self.user, name='yubikey', last_used_at=timezone.now(),
+        )
+        explicit = TOTPDevice.objects.create(user=self.user, name='default')
+        self.assertEqual(default_device(self.user), explicit)
+
+    def test_most_recently_used_wins(self):
+        # The recently used device is created FIRST, so it is also the lowest
+        # pk and lowest persistent_id. An implementation that returned the
+        # newest, the last in iteration order, or the tie-break device would
+        # fail here -- only recency selects it.
+        recent = TOTPDevice.objects.create(
+            user=self.user, name='recent', last_used_at=timezone.now(),
+        )
+        TOTPDevice.objects.create(
+            user=self.user, name='stale',
+            last_used_at=timezone.now() - timedelta(days=30),
+        )
+        self.assertEqual(default_device(self.user), recent)
+
+    def test_timestamped_device_beats_device_without_timestamp(self):
+        # PhoneDevice has no last_used_at (no TimestampMixin), so it can never
+        # win on recency. Documents that asymmetry rather than hiding it.
+        phone = PhoneDevice.objects.create(
+            user=self.user, name='phone', number=PhoneNumber.from_string('+31101234567'),
+        )
+        self.assertFalse(hasattr(phone, 'last_used_at'))
+        totp = TOTPDevice.objects.create(
+            user=self.user, name='totp',
+            last_used_at=timezone.now() - timedelta(days=365),
+        )
+        self.assertEqual(default_device(self.user), totp)
+
+    def test_positive_result_is_cached_on_the_user(self):
+        device = TOTPDevice.objects.create(user=self.user, name='default')
+        self.assertEqual(default_device(self.user), device)
+        self.assertEqual(
+            getattr(self.user, USER_DEFAULT_DEVICE_ATTR_NAME), device
+        )
+
+    def test_negative_result_is_not_cached(self):
+        self.assertIsNone(default_device(self.user))
+        self.assertFalse(hasattr(self.user, USER_DEFAULT_DEVICE_ATTR_NAME))
+        TOTPDevice.objects.create(user=self.user, name='default')
+        self.assertIsNotNone(default_device(self.user))
+
+    def test_static_backup_device_is_not_chosen(self):
+        StaticDevice.objects.create(user=self.user, name='tokens')
+        self.assertIsNone(default_device(self.user))
+
+    def test_device_named_backup_is_not_chosen(self):
+        TOTPDevice.objects.create(user=self.user, name='backup')
+        self.assertIsNone(default_device(self.user))
+
+    def test_anonymous_and_missing_user_return_none(self):
+        self.assertIsNone(default_device(AnonymousUser()))
+        self.assertIsNone(default_device(None))
+
+    def test_confirmed_false_returns_only_unconfirmed(self):
+        TOTPDevice.objects.create(user=self.user, name='yes', confirmed=True)
+        unconfirmed = TOTPDevice.objects.create(
+            user=self.user, name='no', confirmed=False,
+        )
+        self.assertEqual(default_device(self.user, confirmed=False), unconfirmed)
+
+    def test_confirmed_none_returns_both(self):
+        confirmed = TOTPDevice.objects.create(
+            user=self.user, name='default', confirmed=True,
+        )
+        TOTPDevice.objects.create(user=self.user, name='no', confirmed=False)
+        self.assertEqual(default_device(self.user, confirmed=None), confirmed)
+
+
+class DefaultDevicePickerHookTests(UserMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = self.create_user()
+
+    @override_settings(
+        TWO_FACTOR_DEFAULT_DEVICE_PICKER='tests.test_utils._picker_returns_first',
+    )
+    def test_custom_picker_overrides_built_in_policy(self):
+        # The built-in policy would skip this StaticDevice as a backup; the
+        # custom picker returns it, proving the hook takes over entirely.
+        static = StaticDevice.objects.create(user=self.user, name='tokens')
+        self.assertEqual(default_device(self.user), static)
+
+    @override_settings(
+        TWO_FACTOR_DEFAULT_DEVICE_PICKER='tests.test_utils._picker_returns_none',
+    )
+    def test_custom_picker_returning_none_is_not_cached(self):
+        TOTPDevice.objects.create(user=self.user, name='default')
+        self.assertIsNone(default_device(self.user))
+        self.assertFalse(hasattr(self.user, USER_DEFAULT_DEVICE_ATTR_NAME))
+
+    def test_built_in_policy_used_when_setting_unset(self):
+        explicit = TOTPDevice.objects.create(user=self.user, name='default')
+        self.assertEqual(default_device(self.user), explicit)

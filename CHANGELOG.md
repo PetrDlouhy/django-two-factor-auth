@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+### Added
+- `TWO_FACTOR_DEFAULT_DEVICE_PICKER`, making the choice of a user's primary
+  device pluggable, and a built-in policy that no longer returns `None` when a
+  user has devices but none named `default` (#652). Backup devices
+  (`StaticDevice`, or any device named `backup`) are excluded -- which also
+  means a `StaticDevice` named `default` is no longer eligible as the primary
+  device. `two_factor.utils.primary_device_candidates` is public so custom
+  pickers can reuse that filter.
+
 ### Fixed
 - The WebAuthn login and setup pages crash on Django 6.1.0 with
   `AttributeError: '__proxy__' object has no attribute '__html__'` when the

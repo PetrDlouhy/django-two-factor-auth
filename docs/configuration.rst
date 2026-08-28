@@ -44,6 +44,31 @@ General Settings
 
   For more QR factories that are available see python-qrcode_.
 
+``TWO_FACTOR_DEFAULT_DEVICE_PICKER`` (default: ``None``)
+  Dotted path to a callable deciding which of a user's devices is their
+  primary one, used by :func:`two_factor.utils.default_device`. It takes the
+  full list of the user's devices (backup devices included) and returns one of
+  them, or ``None``.
+
+  When unset, the built-in policy applies:
+
+  1. a device named ``'default'``, so deployments relying on the setup
+     wizard's naming keep their existing behaviour;
+  2. otherwise the most recently used device;
+  3. otherwise the device with the lowest ``persistent_id``, compared as a
+     string, so the choice is stable across requests.
+
+  Backup devices are excluded from the built-in policy: ``StaticDevice`` and
+  any device named ``'backup'``. ``two_factor.utils.primary_device_candidates``
+  applies that filter and is public so custom pickers can reuse it.
+
+  .. note::
+     Step 2 relies on ``last_used_at`` from django-otp's ``TimestampMixin``,
+     added in django-otp 1.4. Device models without it -- including this
+     package's own ``PhoneDevice`` -- can never be selected on recency and
+     fall through to step 3. On a mix of timestamped and untimestamped
+     devices, the timestamped ones are therefore always preferred.
+
 ``TWO_FACTOR_TOTP_DIGITS`` (default: ``6``)
   The number of digits to use for TOTP tokens, can be set to 6 or 8. This
   setting will be used for tokens delivered by phone call or text message and
