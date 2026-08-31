@@ -2,6 +2,13 @@
 
 ## Unreleased
 ### Fixed
+- The WebAuthn login and setup pages crash on Django 6.1.0 with
+  `AttributeError: '__proxy__' object has no attribute '__html__'` when the
+  form media is rendered: the media lists contained `reverse_lazy()` paths,
+  which Django 6.1.0's form-media rendering does not handle (a Django
+  regression, ticket #37262, fixed upstream for 6.1.1). The URLs are now
+  resolved with `reverse()` in `media` properties at request time, which works
+  on all supported Django versions including 6.1.0.
 - Compile translation files for Azerbaijani and Serbian, forgotten in 1.18.1.
 
 ## 1.18.1
