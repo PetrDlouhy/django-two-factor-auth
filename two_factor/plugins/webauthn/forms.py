@@ -2,7 +2,7 @@ from hashlib import sha1
 
 from django import forms
 from django.conf import settings
-from django.urls import reverse_lazy
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
@@ -65,7 +65,10 @@ WebauthnEntitiesFormMixin = import_string(settings.TWO_FACTOR_WEBAUTHN_ENTITIES_
 class WebauthnAuthenticationTokenForm(WebauthnEntitiesFormMixin, AuthenticationTokenForm):
     @property
     def media(self):
-        return forms.Media(js=('two_factor/js/webauthn_utils.js', reverse_lazy('two_factor:webauthn:get_credential')))
+        # reverse(), not reverse_lazy(): a lazy proxy in Media paths crashes
+        # rendering on Django 6.1.0 (#37262, fixed upstream in 6.1.1), and the
+        # property is only evaluated at request time anyway.
+        return forms.Media(js=('two_factor/js/webauthn_utils.js', reverse('two_factor:webauthn:get_credential')))
 
     def __init__(self, user, initial_device, request, **kwargs):
         super().__init__(user, initial_device, **kwargs)
@@ -114,8 +117,14 @@ class WebauthnDeviceValidationForm(WebauthnEntitiesFormMixin, DeviceValidationFo
     )
     idempotent = False
 
-    class Media:
-        js = ('two_factor/js/webauthn_utils.js', reverse_lazy('two_factor:webauthn:create_credential'))
+    @property
+    def media(self):
+        # See WebauthnAuthenticationTokenForm.media: a class Media with a
+        # reverse_lazy() path crashes rendering on Django 6.1.0 (#37262).
+        # super().media keeps the widget-media merging that class Media had.
+        return super().media + forms.Media(
+            js=('two_factor/js/webauthn_utils.js', reverse('two_factor:webauthn:create_credential')),
+        )
 
     def __init__(self, device, request, **kwargs):
         super().__init__(device, **kwargs)
